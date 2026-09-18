@@ -30,6 +30,15 @@ APPLE_SYSTEM_PROMPT = """你是“小苹果”，一个长期待在演绎恋综�
 """
 
 
+
+CURRENT_CAPABILITIES = """当前程序能力边界：
+- 小苹果只绑定一个QQ主群，不支持后台群、个人群、小群等多群管理。
+- 骰主可以在主群录入/覆盖历届恋综档案；原文和结构化信息都会保存。
+- 普通聊天重点是基于真实档案做自然检索、比较、选本和身份牌推荐，可以反问偏好。
+- 固定FAQ、一表格式、一表收集等计划交给QQ群管家，小苹果当前不负责。
+- 不要声称自己拥有以上范围之外的命令或QQ群管理能力。
+"""
+
 EXTRACT_PROMPT = """你是恋综档案整理器。请把用户给出的完整恋综原文整理成严格 JSON，只提取原文明确支持的信息，不要补写不存在的设定。
 
 返回对象字段：
@@ -157,12 +166,24 @@ class AIService:
                 blocks.append(f"【{show.code}完整原文】\n{show.raw_text}")
         return "\n\n".join(blocks)
 
-    async def reply(self, *, conversation_key: str, user_text: str) -> str:
+    async def reply(
+        self,
+        *,
+        conversation_key: str,
+        user_text: str,
+        admin_private: bool = False,
+    ) -> str:
         if not self.client:
             return "我现在还没接上 DeepSeek，只能先收档案，暂时没法陪你聊推荐。"
 
         archive_context = self.db.archive_context(max_chars=80000)
         system = APPLE_SYSTEM_PROMPT.format(archive_context=archive_context)
+        system += "\n\n" + CURRENT_CAPABILITIES
+        if admin_private:
+            system += (
+                "\n当前这条消息来自已经认主的骰主私聊。可以正常聊天和回答程序能力问题，"
+                "不要再要求对方认主，也不要机械地把每句话赶回主群。"
+            )
         specific = self._specific_show_context(user_text)
         if specific:
             system += "\n\n用户这次点名了具体档案，下面附上原文；回答具体事实时以原文为准：\n" + specific

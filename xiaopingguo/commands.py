@@ -47,7 +47,7 @@ class CommandRouter:
 
     @staticmethod
     def _help(admin: bool) -> str:
-        base = """小苹果 v0.2
+        base = """小苹果 v0.2.2
 
 我现在主要干两件事：
 1）记住历届恋综和身份牌；
@@ -115,10 +115,20 @@ class CommandRouter:
                 return CommandResult("现在有这些：\n" + "\n".join(lines))
 
             if is_admin:
-                return CommandResult(
-                    "你已经认主成功了，没有失忆。只是正式功能放在主群。\n"
-                    "回主群 @我 发“设为主群”；想看我会什么，私聊发“帮助”也可以。"
+                # 骰主认主后，私聊不再进入“请认主”的死循环。
+                # 能确定回答的程序能力问题优先由代码回答；其他内容交给 AI 自然聊天。
+                if re.search(r"后台群|个人群|小群|多个群", text):
+                    return CommandResult(
+                        "当前这版不能设置后台群、个人群或小群。我们刚把小苹果收窄成只驻一个主群："
+                        "负责历届恋综档案、自然检索和选本/身份牌推荐。固定FAQ和一表继续交给QQ群管家更合适。"
+                    )
+
+                reply = await self.ai.reply(
+                    conversation_key=f"c2c:{ctx.user_openid}",
+                    user_text=text,
+                    admin_private=True,
                 )
+                return CommandResult(reply)
 
             return CommandResult("我现在主要在主群营业。骰主第一次使用时可以在这里发“认主 <口令>”。")
 

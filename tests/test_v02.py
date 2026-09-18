@@ -65,3 +65,62 @@ def test_database_upsert_and_draft():
         second = db.upsert_show(code="P1", structured=structured, raw_text=SAMPLE + "\n新版", raw_chunks=[SAMPLE, "新版"])
         assert second.version == 2
         assert db.get_show_by_code("P1").version == 2
+
+import asyncio
+import sys
+import types
+
+# 测试只验证路由，不实际调用 OpenAI SDK。
+fake_openai = types.ModuleType("openai")
+class DummyAsyncOpenAI:
+    pass
+fake_openai.AsyncOpenAI = DummyAsyncOpenAI
+sys.modules.setdefault("openai", fake_openai)
+
+from xiaopingguo.commands import CommandContext, CommandRouter
+from xiaopingguo.config import Settings
+
+
+class FakeAI:
+    def __init__(self):
+        self.calls = []
+
+    async def reply(self, **kwargs):
+        self.calls.append(kwargs)
+        return "私聊自然回复"
+
+
+def _settings():
+    return Settings(
+        qq_app_id="x",
+        qq_app_secret="x",
+        deepseek_api_key="x",
+        deepseek_model="deepseek-flash",
+        claim_token="token",
+        port=8080,
+        database_url="sqlite:///:memory:",
+        ai_history_limit=12,
+    )
+
+
+def test_admin_private_fallback_and_capability_answer():
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(f"sqlite:///{Path(td) / 'test.db'}")
+        db.create_all()
+        db.claim_admin("admin")
+        ai = FakeAI()
+        router = CommandRouter(_settings(), db, ai)
+
+        r1 = asyncio.run(
+            router.handle(
+                CommandContext(user_openid="admin", raw_text="我能设置个后台群吗")
+            )
+        )
+        assert "不能设置后台群" in r1.text
+        assert not ai.calls
+
+        r2 = asyncio.run(
+            router.handle(CommandContext(user_openid="admin", raw_text="已经设置了"))
+        )
+        assert r2.text == "私聊自然回复"
+        assert ai.calls[-1]["admin_private"] is True
