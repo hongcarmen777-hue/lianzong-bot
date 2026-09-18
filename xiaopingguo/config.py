@@ -33,8 +33,15 @@ def _database_url() -> str:
             "?charset=utf8mb4"
         )
 
-    # 只用于第一次跑通。云容器重启/重新部署后可能丢失。
     return "sqlite:////tmp/xiaopingguo-v02.db"
+
+
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
 
 
 @dataclass(frozen=True)
@@ -47,18 +54,34 @@ class Settings:
     port: int
     database_url: str
     ai_history_limit: int
+    cloudbase_env_id: str = ""
+    cloudbase_api_key: str = ""
+
+    @property
+    def use_cloudbase_http_db(self) -> bool:
+        return bool(self.cloudbase_env_id and self.cloudbase_api_key)
 
     @classmethod
     def from_env(cls) -> "Settings":
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+        # v0.2.0-0.2.2 once documented this shorthand; normalize it to the
+        # current official model id so existing CloudBase settings keep working.
+        if model == "deepseek-flash":
+            model = "deepseek-v4-flash"
+
         return cls(
             qq_app_id=os.getenv("QQ_APP_ID", "").strip(),
             qq_app_secret=os.getenv("QQ_APP_SECRET", "").strip(),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
-            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip() or "deepseek-flash",
+            deepseek_model=model,
             claim_token=os.getenv("CLAIM_TOKEN", "").strip(),
             port=_int("PORT", 8080),
             database_url=_database_url(),
             ai_history_limit=_int("AI_HISTORY_LIMIT", 20, minimum=4),
+            cloudbase_env_id=_first_env("TCB_ENV_ID", "CLOUDBASE_ENV_ID"),
+            cloudbase_api_key=_first_env(
+                "TCB_API_KEY", "CLOUDBASE_API_KEY", "CLOUDBASE_APIKEY"
+            ),
         )
 
     def validate(self) -> None:

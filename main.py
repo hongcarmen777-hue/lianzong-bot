@@ -10,12 +10,13 @@ from xiaopingguo.bot import AppleBot
 from xiaopingguo.commands import CommandRouter
 from xiaopingguo.config import Settings
 from xiaopingguo.db import Database
+from xiaopingguo.db_http import CloudBaseHTTPDatabase
 
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in {"/", "/health", "/healthz"}:
-            body = "xiaopingguo v0.2 ok\n".encode("utf-8")
+            body = "xiaopingguo v0.2.3 ok\n".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -36,13 +37,24 @@ def start_health_server(port: int):
     return server
 
 
+def build_database(settings: Settings):
+    if settings.use_cloudbase_http_db:
+        db = CloudBaseHTTPDatabase(settings.cloudbase_env_id, settings.cloudbase_api_key)
+        db.create_all()
+        print("[xiaopingguo] database backend: CloudBase MySQL HTTP API")
+        return db
+
+    db = Database(settings.database_url)
+    db.create_all()
+    print(f"[xiaopingguo] database backend: {db.backend_name}")
+    return db
+
+
 def main():
     settings = Settings.from_env()
     settings.validate()
 
-    db = Database(settings.database_url)
-    db.create_all()
-
+    db = build_database(settings)
     ai = AIService(settings, db)
     router = CommandRouter(settings, db, ai)
 

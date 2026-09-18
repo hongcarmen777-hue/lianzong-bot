@@ -87,6 +87,7 @@ class AIHistory(Base):
 class Database:
     def __init__(self, url: str):
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+        self.backend_name = "SQLite 临时数据库" if url.startswith("sqlite") else "SQL 直连数据库（持久化）"
         self.engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
 
