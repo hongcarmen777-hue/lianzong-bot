@@ -89,7 +89,13 @@ class CommandRouter:
         text = normalize_text(ctx.raw_text)
         is_admin = self.db.is_admin(ctx.user_openid)
 
-        # 私聊只保留认主入口；小苹果的主要使用场景是主群。
+        help_aliases = {
+            "帮助", "help", "菜单", "你会什么", "你能干什么", "你能干啥",
+            "你能干嘛", "我能干点啥", "我能干什么", "怎么玩", "怎么用",
+        }
+        archive_aliases = {"档案列表", "查看档案", "查看恋综", "恋综列表", "已有恋综"}
+
+        # 私聊用于首次认主和骰主调试；正式聊天仍以主群为主。
         if not ctx.is_group:
             if text.startswith("认主 "):
                 token = text.split(maxsplit=1)[1].strip()
@@ -97,8 +103,23 @@ class CommandRouter:
                     return CommandResult("认主口令不对。")
                 self.db.claim_admin(ctx.user_openid)
                 return CommandResult("认主成功。回主群 @我，发“设为主群”就行。")
-            if text in {"帮助", "help", "菜单"}:
+
+            if text in help_aliases:
                 return CommandResult(self._help(is_admin))
+
+            if text in archive_aliases and is_admin:
+                shows = self.db.list_shows()
+                if not shows:
+                    return CommandResult("你已经认主成功了。档案库现在还是空的；先回主群 @我 发“设为主群”，再开始录入。")
+                lines = [f"{s.code}｜{s.full_name or s.title or s.code}｜v{s.version}" for s in shows]
+                return CommandResult("现在有这些：\n" + "\n".join(lines))
+
+            if is_admin:
+                return CommandResult(
+                    "你已经认主成功了，没有失忆。只是正式功能放在主群。\n"
+                    "回主群 @我 发“设为主群”；想看我会什么，私聊发“帮助”也可以。"
+                )
+
             return CommandResult("我现在主要在主群营业。骰主第一次使用时可以在这里发“认主 <口令>”。")
 
         # 尚未设置主群时，只允许已认主的骰主完成绑定。
@@ -154,7 +175,7 @@ class CommandRouter:
             count = self.db.append_draft_chunk(ctx.user_openid, chunk)
             return CommandResult(f"收到第 {count} 段。继续发，最后跟我说“录入完成”。")
 
-        if text in {"帮助", "help", "菜单"}:
+        if text in help_aliases:
             return CommandResult(self._help(is_admin))
 
         if text == "设为主群":
@@ -178,7 +199,7 @@ class CommandRouter:
                 f"好，开始收 {code}。资料可以拆成多条，每条都 @我；最后说“录入完成”。原文会保存。"
             )
 
-        if text == "档案列表":
+        if text in archive_aliases:
             if not is_admin:
                 return CommandResult("档案列表先只给骰主看。你直接告诉我想玩什么，我帮你找。")
             shows = self.db.list_shows()
