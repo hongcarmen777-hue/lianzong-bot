@@ -17,7 +17,7 @@ class AppleBot(botpy.Client):
         self.router = router
 
     async def on_ready(self):
-        _log.info(f"小苹果 v0.2 上线：{self.robot.name}")
+        _log.info(f"小苹果 v0.2.4 上线：{self.robot.name}")
 
     async def on_group_at_message_create(self, message: GroupMessage):
         try:

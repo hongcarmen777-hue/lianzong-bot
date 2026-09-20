@@ -47,7 +47,7 @@ class CommandRouter:
 
     @staticmethod
     def _help(admin: bool) -> str:
-        base = """小苹果 v0.2.3
+        base = """小苹果 v0.2.4
 
 我现在主要干两件事：
 1）记住历届恋综和身份牌；
@@ -62,14 +62,15 @@ class CommandRouter:
         if admin:
             base += """
 
-骰主录入：
+骰主后台（请私聊我）：
 录入恋综 P1
-（之后每一段资料都要 @小苹果 发给我）
+（之后直接连续私聊发送资料，不用 @我）
 录入完成
 取消录入
 
+重新录同一个编号会覆盖旧档案并升版本。
 首次设置主群：在目标群里 @小苹果 发送“设为主群”。
-查看已有档案可发送“档案列表”。"""
+查看已有档案可私聊发送“档案列表”。"""
         return base
 
     @staticmethod
@@ -98,44 +99,92 @@ class CommandRouter:
 
         if text in status_aliases:
             backend = getattr(self.db, "backend_name", "未知")
-            return CommandResult(f"小苹果 v0.2.3｜数据库：{backend}")
+            return CommandResult(f"小苹果 v0.2.4｜数据库：{backend}")
 
-        # 私聊用于首次认主和骰主调试；正式聊天仍以主群为主。
+        # 私聊是骰主后台：认主、档案录入/覆盖、查看档案，以及后台自然聊天。
         if not ctx.is_group:
             if text.startswith("认主 "):
                 token = text.split(maxsplit=1)[1].strip()
                 if token != self.settings.claim_token:
                     return CommandResult("认主口令不对。")
                 self.db.claim_admin(ctx.user_openid)
-                return CommandResult("认主成功。回主群 @我，发“设为主群”就行。")
+                return CommandResult("认主成功。以后恋综档案直接私聊我录入；主群只负责对外查询和推荐。")
 
             if text in help_aliases:
                 return CommandResult(self._help(is_admin))
 
-            if text in archive_aliases and is_admin:
-                shows = self.db.list_shows()
-                if not shows:
-                    return CommandResult("你已经认主成功了。档案库现在还是空的；先回主群 @我 发“设为主群”，再开始录入。")
-                lines = [f"{s.code}｜{s.full_name or s.title or s.code}｜v{s.version}" for s in shows]
-                return CommandResult("现在有这些：\n" + "\n".join(lines))
+            if not is_admin:
+                return CommandResult("我现在主要在主群营业。骰主第一次使用时可以在这里发“认主 <口令>”。")
 
-            if is_admin:
-                # 骰主认主后，私聊不再进入“请认主”的死循环。
-                # 能确定回答的程序能力问题优先由代码回答；其他内容交给 AI 自然聊天。
-                if re.search(r"后台群|个人群|小群|多个群", text):
+            # 骰主正在私聊录入：除完成/取消外，其余消息都按原文作为资料片段保存。
+            draft = self.db.get_draft(ctx.user_openid)
+            if draft:
+                if text == "取消录入":
+                    code = draft.show_code
+                    self.db.cancel_draft(ctx.user_openid)
+                    return CommandResult(f"取消了，{code} 这次还没写进正式档案。")
+
+                if text == "录入完成":
+                    code, chunks = self.db.draft_payload(ctx.user_openid)
+                    if not chunks:
+                        return CommandResult("你还没给我正文。至少发一段资料再说“录入完成”。")
+                    raw_text = "\n\n".join(chunks)
+                    structured = await self.ai.parse_show(code=code, raw_text=raw_text)
+                    record = self.db.upsert_show(
+                        code=code,
+                        structured=structured,
+                        raw_text=raw_text,
+                        raw_chunks=chunks,
+                    )
+                    self.db.delete_draft_after_save(ctx.user_openid)
+                    cards = structured.get("identity_cards") or []
+                    display = record.full_name or record.title or record.code
                     return CommandResult(
-                        "当前这版不能设置后台群、个人群或小群。我们刚把小苹果收窄成只驻一个主群："
-                        "负责历届恋综档案、自然检索和选本/身份牌推荐。固定FAQ和一表继续交给QQ群管家更合适。"
+                        f"收好了。{record.code}｜{display}\n"
+                        f"现在是 v{record.version}，识别到 {len(cards)} 张身份牌。\n"
+                        "已经写进共享档案库；主群现在就能从这份资料里查询和推荐。"
                     )
 
-                reply = await self.ai.reply(
-                    conversation_key=f"c2c:{ctx.user_openid}",
-                    user_text=text,
-                    admin_private=True,
-                )
-                return CommandResult(reply)
+                chunk = (ctx.raw_text or "").strip()
+                if not chunk:
+                    return CommandResult("这条没有正文，我没存。")
+                count = self.db.append_draft_chunk(ctx.user_openid, chunk)
+                return CommandResult(f"收到第 {count} 段。继续直接私聊发，最后跟我说“录入完成”。")
 
-            return CommandResult("我现在主要在主群营业。骰主第一次使用时可以在这里发“认主 <口令>”。")
+            code = self._extract_ingest_code(text)
+            if code:
+                existing = self.db.get_show_by_code(code)
+                self.db.start_draft(ctx.user_openid, code, mode="upsert")
+                if existing:
+                    return CommandResult(
+                        f"好，开始收 {code} 的新版。现在库里是 v{existing.version}；这次“录入完成”后会覆盖并升一个版本。\n"
+                        "接下来直接私聊把资料分段发给我，不用 @我；原文会完整保存。"
+                    )
+                return CommandResult(
+                    f"好，开始收 {code}。接下来直接私聊把资料分段发给我，不用 @我；"
+                    "最后说“录入完成”。原文会完整保存。"
+                )
+
+            if text in archive_aliases:
+                shows = self.db.list_shows()
+                if not shows:
+                    return CommandResult("档案库现在还是空的。私聊我发“录入恋综 P1”就可以开始。")
+                lines = [f"{sh.code}｜{sh.full_name or sh.title or sh.code}｜v{sh.version}" for sh in shows]
+                return CommandResult("现在有这些：\n" + "\n".join(lines))
+
+            # 能确定回答的程序能力问题优先由代码回答；其他内容交给 AI 自然聊天。
+            if re.search(r"后台群|个人群|小群|多个群", text):
+                return CommandResult(
+                    "不能设置后台群，也不需要另建后台群。现在骰主直接私聊我录入、覆盖和查看恋综档案；"
+                    "主群只负责给嘉宾查询、聊天和推荐。"
+                )
+
+            reply = await self.ai.reply(
+                conversation_key=f"c2c:{ctx.user_openid}",
+                user_text=text,
+                admin_private=True,
+            )
+            return CommandResult(reply)
 
         # 尚未设置主群时，只允许已认主的骰主完成绑定。
         main_group = self.db.get_main_group()
@@ -154,65 +203,12 @@ class CommandRouter:
                 return CommandResult("主群已改到这里。原来的群我就不回应了。")
             return CommandResult(None)
 
-        # 正在录入时，除了“录入完成/取消录入”之外，其余 @ 消息全部视为原始资料片段。
-        draft = self.db.get_draft(ctx.user_openid) if is_admin else None
-        if draft:
-            if text == "取消录入":
-                code = draft.show_code
-                self.db.cancel_draft(ctx.user_openid)
-                return CommandResult(f"取消了，{code} 这次还没写进正式档案。")
-
-            if text == "录入完成":
-                code, chunks = self.db.draft_payload(ctx.user_openid)
-                if not chunks:
-                    return CommandResult("你还没给我正文。至少发一段资料再说“录入完成”。")
-                raw_text = "\n\n".join(chunks)
-                structured = await self.ai.parse_show(code=code, raw_text=raw_text)
-                record = self.db.upsert_show(
-                    code=code,
-                    structured=structured,
-                    raw_text=raw_text,
-                    raw_chunks=chunks,
-                )
-                self.db.delete_draft_after_save(ctx.user_openid)
-                cards = structured.get("identity_cards") or []
-                display = record.full_name or record.title or record.code
-                return CommandResult(
-                    f"收好了。{record.code}｜{display}\n"
-                    f"现在是 v{record.version}，识别到 {len(cards)} 张身份牌。\n"
-                    "原文也整份留着；以后重新录同一个编号，会直接覆盖成新版本。"
-                )
-
-            # 只剥掉 @小苹果 本身，其余文字按这条消息的原样保存。
-            chunk = strip_bot_mentions(ctx.raw_text).strip()
-            if not chunk:
-                return CommandResult("这条没有正文，我没存。")
-            count = self.db.append_draft_chunk(ctx.user_openid, chunk)
-            return CommandResult(f"收到第 {count} 段。继续发，最后跟我说“录入完成”。")
-
-        if text in help_aliases:
-            return CommandResult(self._help(is_admin))
-
-        if text == "设为主群":
-            if not is_admin:
-                return CommandResult("这个只能骰主设置。")
-            self.db.set_main_group(ctx.group_openid or "")
-            return CommandResult("这里已经是主群。")
-
+        # 档案录入只走骰主私聊；主群保持干净，只负责查询、聊天和推荐。
         code = self._extract_ingest_code(text)
-        if code:
+        if code or text in {"录入完成", "取消录入"}:
             if not is_admin:
-                return CommandResult("录入档案只有骰主能用。")
-            existing = self.db.get_show_by_code(code)
-            self.db.start_draft(ctx.user_openid, code, mode="upsert")
-            if existing:
-                return CommandResult(
-                    f"好，开始收 {code} 的新版。现在库里是 v{existing.version}；这次“录入完成”后会覆盖并升一个版本。\n"
-                    "资料可以拆成多条，每条都 @我；原文会保存。"
-                )
-            return CommandResult(
-                f"好，开始收 {code}。资料可以拆成多条，每条都 @我；最后说“录入完成”。原文会保存。"
-            )
+                return CommandResult("档案录入只有骰主能用。")
+            return CommandResult("档案后台已经改到私聊了。直接私聊我发“录入恋综 P1”，然后连续发送资料，最后发“录入完成”。")
 
         if text in archive_aliases:
             if not is_admin:

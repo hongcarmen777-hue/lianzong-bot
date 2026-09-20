@@ -16,7 +16,7 @@ from xiaopingguo.db_http import CloudBaseHTTPDatabase
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in {"/", "/health", "/healthz"}:
-            body = "xiaopingguo v0.2.3 ok\n".encode("utf-8")
+            body = "xiaopingguo v0.2.4 ok\n".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
