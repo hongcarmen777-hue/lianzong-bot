@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `xp_applications` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `show_code` VARCHAR(40) NOT NULL,
+  `applicant_name` VARCHAR(200) NOT NULL DEFAULT '',
+  `gender` VARCHAR(50) NOT NULL DEFAULT '',
+  `age` VARCHAR(50) NOT NULL DEFAULT '',
+  `preferred_card` VARCHAR(120) NOT NULL DEFAULT '',
+  `tags_json` LONGTEXT NOT NULL,
+  `summary` LONGTEXT NOT NULL,
+  `parsed_json` LONGTEXT NOT NULL,
+  `raw_text` LONGTEXT NOT NULL,
+  `raw_chunks_json` LONGTEXT NOT NULL,
+  `version` INT NOT NULL DEFAULT 1,
+  `_openid` VARCHAR(64) NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `idx_xp_applications_show_code` (`show_code`),
+  KEY `idx_xp_applications_name` (`applicant_name`),
+  KEY `idx_xp_applications_updated_at` (`updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -41,6 +41,24 @@ class HTTPShowRecord:
     updated_at: str | None = None
 
 
+@dataclass
+class HTTPApplicationRecord:
+    id: int
+    show_code: str
+    applicant_name: str = ""
+    gender: str = ""
+    age: str = ""
+    preferred_card: str = ""
+    tags_json: str = "[]"
+    summary: str = ""
+    parsed_json: str = "{}"
+    raw_text: str = ""
+    raw_chunks_json: str = "[]"
+    version: int = 1
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class CloudBaseHTTPDatabase:
     """CloudBase MySQL REST API backend.
 
@@ -74,6 +92,8 @@ class CloudBaseHTTPDatabase:
         if read_back != probe_value:
             raise RuntimeError("CloudBase MySQL 写入自检失败：探针写入后未能读回")
         self._delete("xp_settings", {"key": f"eq.{probe_key}"})
+        # v0.2.7 requires the application table as part of the production schema.
+        self._query("xp_applications", select="id", limit=1)
 
     def diagnostics(self) -> dict[str, Any]:
         # Every field below comes from a live HTTP query, not configuration guesses.
@@ -83,6 +103,7 @@ class CloudBaseHTTPDatabase:
             "shows": len(self._query("xp_shows", select="code")),
             "admins": len(self._query("xp_admins", select="user_openid")),
             "drafts": len(self._query("xp_ingest_drafts", select="show_code")),
+            "applications": len(self._query("xp_applications", select="id")),
         }
 
     def _request(
@@ -166,6 +187,25 @@ class CloudBaseHTTPDatabase:
             identity_cards_json=str(row.get("identity_cards_json") or "[]"),
             summary=str(row.get("summary") or ""),
             metadata_json=str(row.get("metadata_json") or "{}"),
+            raw_text=str(row.get("raw_text") or ""),
+            raw_chunks_json=str(row.get("raw_chunks_json") or "[]"),
+            version=int(row.get("version") or 1),
+            created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
+        )
+
+    @staticmethod
+    def _application(row: dict[str, Any]) -> HTTPApplicationRecord:
+        return HTTPApplicationRecord(
+            id=int(row.get("id") or 0),
+            show_code=str(row.get("show_code") or ""),
+            applicant_name=str(row.get("applicant_name") or ""),
+            gender=str(row.get("gender") or ""),
+            age=str(row.get("age") or ""),
+            preferred_card=str(row.get("preferred_card") or ""),
+            tags_json=str(row.get("tags_json") or "[]"),
+            summary=str(row.get("summary") or ""),
+            parsed_json=str(row.get("parsed_json") or "{}"),
             raw_text=str(row.get("raw_text") or ""),
             raw_chunks_json=str(row.get("raw_chunks_json") or "[]"),
             version=int(row.get("version") or 1),
@@ -318,6 +358,108 @@ class CloudBaseHTTPDatabase:
         if saved.version != version or saved.raw_text != raw_text:
             raise RuntimeError(f"CloudBase MySQL 落库校验失败：{code} 读回内容/版本不一致")
         return saved
+
+    def save_application(
+        self,
+        *,
+        show_code: str,
+        structured: dict,
+        raw_text: str,
+        raw_chunks: list[str],
+    ) -> HTTPApplicationRecord:
+        show_code = show_code.strip().upper()
+        applicant_name = str(structured.get("applicant_name") or "").strip()
+        filters = {"show_code": f"eq.{show_code}"}
+        if applicant_name:
+            filters["applicant_name"] = f"eq.{applicant_name}"
+            rows = self._query("xp_applications", filters=filters, limit=1, order="id.desc")
+        else:
+            rows = []
+        existing = self._application(rows[0]) if rows else None
+        version = (existing.version + 1) if existing else 1
+        payload = {
+            "show_code": show_code,
+            "applicant_name": applicant_name,
+            "gender": str(structured.get("gender") or ""),
+            "age": str(structured.get("age") or ""),
+            "preferred_card": str(structured.get("preferred_card") or ""),
+            "tags_json": json.dumps(structured.get("tags") or [], ensure_ascii=False),
+            "summary": str(structured.get("summary") or ""),
+            "parsed_json": json.dumps(structured, ensure_ascii=False),
+            "raw_text": raw_text,
+            "raw_chunks_json": json.dumps(raw_chunks, ensure_ascii=False),
+            "version": version,
+            "updated_at": _now_sql(),
+        }
+        if existing:
+            self._update("xp_applications", payload, {"id": f"eq.{existing.id}"})
+            expected_id = existing.id
+        else:
+            self._insert("xp_applications", payload)
+            # Query back the newest form for this show. The exact raw_text is verified
+            # immediately below, without placing a potentially huge form into the URL.
+            verify_filters = {"show_code": f"eq.{show_code}"}
+            saved_rows = self._query("xp_applications", filters=verify_filters, limit=1, order="id.desc")
+            if not saved_rows:
+                raise RuntimeError("CloudBase MySQL 一表落库校验失败：写入后查不到")
+            expected_id = int(saved_rows[0].get("id") or 0)
+
+        saved_rows = self._query("xp_applications", filters={"id": f"eq.{expected_id}"}, limit=1)
+        if not saved_rows:
+            raise RuntimeError("CloudBase MySQL 一表落库校验失败：按 ID 读回失败")
+        saved = self._application(saved_rows[0])
+        if saved.raw_text != raw_text or saved.version != version:
+            raise RuntimeError("CloudBase MySQL 一表落库校验失败：读回内容/版本不一致")
+        return saved
+
+    def list_applications(self, show_code: str | None = None) -> list[HTTPApplicationRecord]:
+        filters = {"show_code": f"eq.{show_code.strip().upper()}"} if show_code else None
+        rows = self._query("xp_applications", filters=filters, order="updated_at.desc")
+        return [self._application(row) for row in rows]
+
+    def get_application_by_id(self, application_id: int) -> Optional[HTTPApplicationRecord]:
+        rows = self._query("xp_applications", filters={"id": f"eq.{application_id}"}, limit=1)
+        return self._application(rows[0]) if rows else None
+
+    def application_context(self, max_chars: int = 50000) -> str:
+        rows = self.list_applications()
+        if not rows:
+            return "（还没有录入一表。）"
+        blocks: list[str] = []
+        total = 0
+        for row in rows:
+            parsed = _json_load(row.parsed_json, {})
+            lines = [f"【一表#{row.id}｜{row.show_code}｜{row.applicant_name or '未识别名称'}｜v{row.version}】"]
+            if row.preferred_card:
+                lines.append("意向身份牌：" + row.preferred_card)
+            tags = _json_load(row.tags_json, [])
+            if tags:
+                lines.append("关键词：" + " / ".join(str(x) for x in tags[:10]))
+            prefs = parsed.get("preferences") or []
+            if prefs:
+                lines.append("偏好：" + " / ".join(str(x) for x in prefs[:8]))
+            bounds = parsed.get("boundaries") or []
+            if bounds:
+                lines.append("边界：" + " / ".join(str(x) for x in bounds[:8]))
+            if row.summary:
+                lines.append("概括：" + row.summary.strip())
+            fields = parsed.get("fields") or []
+            compact_fields = []
+            for item in fields[:12]:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("label") or "").strip()
+                value = str(item.get("value") or "").strip().replace("\n", " ")
+                if label and value:
+                    compact_fields.append(f"{label}={value[:180]}")
+            if compact_fields:
+                lines.append("表内字段：" + "；".join(compact_fields))
+            block = "\n".join(lines)
+            if total + len(block) > max_chars:
+                break
+            blocks.append(block)
+            total += len(block) + 2
+        return "\n\n".join(blocks)
 
     def delete_draft_after_save(self, admin_openid: str) -> None:
         self.cancel_draft(admin_openid)

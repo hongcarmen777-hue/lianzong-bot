@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 
 from .config import Settings
 from .db import Database, ShowRecord
-from .parser import parse_local_show
+from .parser import parse_local_application, parse_local_show
 
 
 APPLE_SYSTEM_PROMPT = """你是“小苹果”，一个长期待在演绎恋综主群里的档案馆兼选本搭子。
@@ -36,8 +36,31 @@ CURRENT_CAPABILITIES = """当前程序能力边界：
 - 小苹果只绑定一个QQ主群，不支持后台群、个人群、小群等多群管理。
 - 骰主通过与小苹果的私聊录入/覆盖历届恋综档案；主群不负责录入。私聊流程是“录入恋综 P1”→连续发送资料→“录入完成”。原文和结构化信息都会写入共享档案库。
 - 普通聊天重点是基于真实档案做自然检索、比较、选本和身份牌推荐，可以反问偏好。
-- 固定FAQ、一表格式、一表收集等计划交给QQ群管家，小苹果当前不负责。
+- 固定FAQ、一表格式由QQ群管家负责；骰主可以私聊小苹果录入收到的一表，作为后台档案保存和检索。
+- 一表原文默认只作为骰主后台资料，不在主群主动泄露完整内容。
 - 不要声称自己拥有以上范围之外的命令或QQ群管理能力。
+"""
+
+
+APPLICATION_EXTRACT_PROMPT = """你是演绎恋综报名一表整理器。请把用户提交的一表整理成严格 JSON。只能提取原文明确支持的信息，不要猜测、补全或美化。
+
+返回对象字段：
+{
+  "applicant_name": "报名者/角色/群昵称等最合适的可识别名称；没有就空字符串",
+  "gender": "原文明确写出的性别；没有就空字符串",
+  "age": "原文明确写出的年龄；没有就空字符串",
+  "preferred_card": "明确写出的意向身份牌/角色；没有就空字符串",
+  "tags": ["客观检索关键词，最多8个"],
+  "preferences": ["明确表达的偏好/想玩的内容"],
+  "boundaries": ["明确表达的不接受/雷点/边界"],
+  "summary": "2-4句话概括这张一表的玩法取向，只依据原文",
+  "fields": [
+    {"label": "原表字段名", "value": "对应原文内容"}
+  ]
+}
+
+fields 尽量保留原表中所有清晰的“字段：内容”信息；不要把大段正文擅自改写成不存在的字段。
+只输出 JSON，不要 Markdown，不要解释。该一表属于恋综 {code}。
 """
 
 EXTRACT_PROMPT = """你是恋综档案整理器。请把用户给出的完整恋综原文整理成严格 JSON，只提取原文明确支持的信息，不要补写不存在的设定。
@@ -109,7 +132,7 @@ class AIService:
             response = await self.client.chat.completions.create(
                 model=self.settings.deepseek_model,
                 messages=[
-                    {"role": "system", "content": EXTRACT_PROMPT.format(code=code)},
+                    {"role": "system", "content": EXTRACT_PROMPT.replace("{code}", code)},
                     {"role": "user", "content": raw_text},
                 ],
                 temperature=0.1,
@@ -154,6 +177,36 @@ class AIService:
         merged["code"] = code.strip().upper()
         return merged
 
+    async def parse_application(self, *, show_code: str, raw_text: str) -> dict[str, Any]:
+        local = parse_local_application(show_code, raw_text)
+        if not self.client:
+            return local
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.settings.deepseek_model,
+                messages=[
+                    {"role": "system", "content": APPLICATION_EXTRACT_PROMPT.replace("{code}", show_code)},
+                    {"role": "user", "content": raw_text},
+                ],
+                temperature=0.1,
+                stream=False,
+            )
+            ai_data = self._parse_json_text(response.choices[0].message.content or "")
+        except Exception:
+            return local
+
+        merged = dict(local)
+        for key in (
+            "applicant_name", "gender", "age", "preferred_card",
+            "tags", "preferences", "boundaries", "summary", "fields",
+        ):
+            value = ai_data.get(key)
+            if value not in (None, "", [], {}):
+                merged[key] = value
+        merged["show_code"] = show_code.strip().upper()
+        return merged
+
     def _specific_show_context(self, user_text: str) -> str:
         codes = []
         for m in re.finditer(r"(?i)(?:[A-Z][A-Z0-9_-]*-)?P\d+", user_text or ""):
@@ -185,8 +238,11 @@ class AIService:
                 "\n当前这条消息来自已经认主的骰主私聊。可以正常聊天和回答程序能力问题，"
                 "不要再要求对方认主，也不要机械地把每句话赶回主群。"
                 "尤其不要说‘落库必须回主群’或‘私聊不能进档’：这两句话在当前版本是错误的。"
-                "如果对方想录入但还没进入录入流程，告诉对方就在当前私聊发送‘录入恋综 P1’，然后发资料，最后发‘录入完成’。"
+                "录入完整恋综：在当前私聊发送‘录入恋综 P1’，发资料，最后发‘录入完成’。"
+                "录入收到的一表：在当前私聊发送‘录入一表 P1’，发一表正文，最后发‘录入完成’。"
             )
+            app_context = self.db.application_context(max_chars=50000)
+            system += "\n\n下面是骰主后台已录入的一表索引。只有当前骰主私聊可以使用这些后台资料：\n" + app_context
         specific = self._specific_show_context(user_text)
         if specific:
             system += "\n\n用户这次点名了具体档案，下面附上原文；回答具体事实时以原文为准：\n" + specific

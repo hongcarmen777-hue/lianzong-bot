@@ -47,7 +47,7 @@ class CommandRouter:
 
     @staticmethod
     def _help(admin: bool) -> str:
-        base = """小苹果 v0.2.6
+        base = """小苹果 v0.2.7
 
 我现在主要干两件事：
 1）记住历届恋综和身份牌；
@@ -63,14 +63,15 @@ class CommandRouter:
             base += """
 
 骰主后台（请私聊我）：
-录入恋综 P1
-（之后直接连续私聊发送资料，不用 @我）
+录入恋综 P1 —— 收完整恋综档案
+录入一表 P1 —— 收这届的一张报名一表
+（之后直接连续私聊发送正文，不用 @我）
 录入完成
 取消录入
 
-重新录同一个编号会覆盖旧档案并升版本。
-首次设置主群：在目标群里 @小苹果 发送“设为主群”。
-查看已有档案可私聊发送“档案列表”。"""
+重新录同一个恋综编号会覆盖旧档案并升版本；同一届同名一表会更新版本。
+查看：档案列表 / 一表列表 / 一表列表 P1 / 查看一表 12
+首次设置主群：在目标群里 @小苹果 发送“设为主群”。"""
         return base
 
     @staticmethod
@@ -79,6 +80,19 @@ class CommandRouter:
             r"^(?:开始)?录入(?:恋综)?\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
             r"^覆盖(?:恋综)?\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
             r"^录入这辆[，,\s]*编号\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
+        ]
+        for pattern in patterns:
+            m = re.match(pattern, text, flags=re.I)
+            if m:
+                return m.group(1).upper()
+        return None
+
+    @staticmethod
+    def _extract_application_code(text: str) -> Optional[str]:
+        patterns = [
+            r"^(?:开始)?录入一表\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
+            r"^一表录入\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
+            r"^收一表\s*([A-Za-z0-9_-]*P\d+|P\d+)$",
         ]
         for pattern in patterns:
             m = re.match(pattern, text, flags=re.I)
@@ -99,7 +113,13 @@ class CommandRouter:
 
         if text in status_aliases:
             backend = getattr(self.db, "backend_name", "未知")
-            return CommandResult(f"小苹果 v0.2.6｜数据库：{backend}")
+            try:
+                d = self.db.diagnostics()
+                return CommandResult(
+                    f"小苹果 v0.2.7｜数据库：{backend}｜恋综 {d.get('shows', 0)}｜一表 {d.get('applications', 0)}｜草稿 {d.get('drafts', 0)}"
+                )
+            except Exception:
+                return CommandResult(f"小苹果 v0.2.7｜数据库：{backend}")
 
         # 私聊是骰主后台：认主、档案录入/覆盖、查看档案，以及后台自然聊天。
         if not ctx.is_group:
@@ -129,6 +149,23 @@ class CommandRouter:
                     if not chunks:
                         return CommandResult("你还没给我正文。至少发一段资料再说“录入完成”。")
                     raw_text = "\n\n".join(chunks)
+                    mode = str(getattr(draft, "mode", "upsert") or "upsert")
+                    if mode == "application":
+                        structured = await self.ai.parse_application(show_code=code, raw_text=raw_text)
+                        record = self.db.save_application(
+                            show_code=code,
+                            structured=structured,
+                            raw_text=raw_text,
+                            raw_chunks=chunks,
+                        )
+                        self.db.delete_draft_after_save(ctx.user_openid)
+                        name = record.applicant_name or "未识别名称"
+                        card = f"｜意向 {record.preferred_card}" if record.preferred_card else ""
+                        return CommandResult(
+                            f"一表落库成功。#{record.id}｜{record.show_code}｜{name}{card}｜v{record.version}\n"
+                            "原文和结构化索引都已经存进 MySQL。以后私聊我可以按这一表继续查。"
+                        )
+
                     structured = await self.ai.parse_show(code=code, raw_text=raw_text)
                     record = self.db.upsert_show(
                         code=code,
@@ -149,7 +186,19 @@ class CommandRouter:
                 if not chunk:
                     return CommandResult("这条没有正文，我没存。")
                 count = self.db.append_draft_chunk(ctx.user_openid, chunk)
+                if str(getattr(draft, "mode", "")) == "application":
+                    return CommandResult(f"收到一表第 {count} 段。继续直接私聊发，最后跟我说“录入完成”。")
                 return CommandResult(f"收到第 {count} 段。继续直接私聊发，最后跟我说“录入完成”。")
+
+            app_code = self._extract_application_code(text)
+            if app_code:
+                self.db.start_draft(ctx.user_openid, app_code, mode="application")
+                show = self.db.get_show_by_code(app_code)
+                known = f"（已关联到 {show.full_name or show.title or show.code}）" if show else "（这届恋综档案还没入库也没关系，可以先存一表）"
+                return CommandResult(
+                    f"好，开始收 {app_code} 的一表{known}。接下来直接把这张一表发给我，不用 @我；"
+                    "可以分段，最后说“录入完成”。原文会完整保存。"
+                )
 
             code = self._extract_ingest_code(text)
             if code:
@@ -172,6 +221,28 @@ class CommandRouter:
                 lines = [f"{sh.code}｜{sh.full_name or sh.title or sh.code}｜v{sh.version}" for sh in shows]
                 return CommandResult("现在有这些：\n" + "\n".join(lines))
 
+            app_list = re.match(r"^(?:一表列表|报名列表)(?:\s+([A-Za-z0-9_-]*P\d+|P\d+))?$", text, flags=re.I)
+            if app_list:
+                code_filter = app_list.group(1).upper() if app_list.group(1) else None
+                rows = self.db.list_applications(code_filter)
+                if not rows:
+                    return CommandResult(f"{code_filter + ' ' if code_filter else ''}还没有录入一表。")
+                lines = []
+                for row in rows[:30]:
+                    card = f"｜意向 {row.preferred_card}" if row.preferred_card else ""
+                    lines.append(f"#{row.id}｜{row.show_code}｜{row.applicant_name or '未识别名称'}{card}｜v{row.version}")
+                suffix = "\n（只显示最近30张）" if len(rows) > 30 else ""
+                return CommandResult("已录入的一表：\n" + "\n".join(lines) + suffix)
+
+            app_detail = re.match(r"^(?:查看一表|一表详情)\s*#?(\d+)$", text)
+            if app_detail:
+                row = self.db.get_application_by_id(int(app_detail.group(1)))
+                if not row:
+                    return CommandResult("没找到这张一表。")
+                return CommandResult(
+                    f"一表#{row.id}｜{row.show_code}｜{row.applicant_name or '未识别名称'}｜v{row.version}\n\n{row.raw_text}"
+                )
+
             # 能确定回答的程序能力问题优先由代码回答；其他内容交给 AI 自然聊天。
             if re.search(r"后台群|个人群|小群|多个群", text):
                 return CommandResult(
@@ -186,12 +257,12 @@ class CommandRouter:
                 and re.search(r"怎么|如何|能不能|可以|需要|是不是|主群|私聊|小窗|这里", text)
             ):
                 return CommandResult(
-                    "可以直接在这个私聊里落库，不用回主群。发“录入恋综 P1”（编号换成实际编号），"
-                    "然后连续把资料发给我，最后发“录入完成”。写入成功后主群会直接读取同一份共享档案。"
+                    "可以直接在这个私聊里落库，不用回主群。完整恋综发“录入恋综 P1”；收到的一表发“录入一表 P1”。"
+                    "然后连续把正文发给我，最后发“录入完成”。"
                 )
 
             reply = await self.ai.reply(
-                conversation_key=f"c2c:v025:{ctx.user_openid}",
+                conversation_key=f"c2c:v027:{ctx.user_openid}",
                 user_text=text,
                 admin_private=True,
             )
@@ -216,10 +287,11 @@ class CommandRouter:
 
         # 档案录入只走骰主私聊；主群保持干净，只负责查询、聊天和推荐。
         code = self._extract_ingest_code(text)
-        if code or text in {"录入完成", "取消录入"}:
+        app_code = self._extract_application_code(text)
+        if code or app_code or text in {"录入完成", "取消录入"}:
             if not is_admin:
                 return CommandResult("档案录入只有骰主能用。")
-            return CommandResult("档案后台已经改到私聊了。直接私聊我发“录入恋综 P1”，然后连续发送资料，最后发“录入完成”。")
+            return CommandResult("档案后台在私聊。完整恋综发“录入恋综 P1”；一表发“录入一表 P1”，然后连续发送正文，最后发“录入完成”。")
 
         if text in archive_aliases:
             if not is_admin:
@@ -235,7 +307,7 @@ class CommandRouter:
 
         # 其余内容都当正常聊天。AI 会读取真实档案索引，必要时先反问偏好。
         reply = await self.ai.reply(
-            conversation_key=f"group:v025:{ctx.group_openid}",
+            conversation_key=f"group:v027:{ctx.group_openid}",
             user_text=text,
         )
         return CommandResult(reply)

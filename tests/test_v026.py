@@ -36,7 +36,7 @@ class FakeCloudBaseDB(CloudBaseHTTPDatabase):
     def __init__(self):
         super().__init__("env-test", "key-test")
         self.tables = {
-            "xp_settings": [], "xp_shows": [], "xp_admins": [], "xp_ingest_drafts": [], "xp_ai_history": []
+            "xp_settings": [], "xp_shows": [], "xp_admins": [], "xp_ingest_drafts": [], "xp_ai_history": [], "xp_applications": []
         }
 
     @staticmethod

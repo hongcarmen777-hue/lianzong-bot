@@ -63,6 +63,24 @@ class ShowRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, index=True)
 
 
+class ApplicationRecord(Base):
+    __tablename__ = "xp_applications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    show_code: Mapped[str] = mapped_column(String(40), index=True)
+    applicant_name: Mapped[str] = mapped_column(String(200), default="", index=True)
+    gender: Mapped[str] = mapped_column(String(50), default="")
+    age: Mapped[str] = mapped_column(String(50), default="")
+    preferred_card: Mapped[str] = mapped_column(String(120), default="")
+    tags_json: Mapped[str] = mapped_column(LONG_TEXT, default="[]")
+    summary: Mapped[str] = mapped_column(LONG_TEXT, default="")
+    parsed_json: Mapped[str] = mapped_column(LONG_TEXT, default="{}")
+    raw_text: Mapped[str] = mapped_column(LONG_TEXT)
+    raw_chunks_json: Mapped[str] = mapped_column(LONG_TEXT, default="[]")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, index=True)
+
+
 class IngestDraft(Base):
     __tablename__ = "xp_ingest_drafts"
     __table_args__ = (UniqueConstraint("admin_openid", name="uq_xp_draft_admin"),)
@@ -103,7 +121,8 @@ class Database:
             shows = len(list(s.scalars(select(ShowRecord))))
             admins = len(list(s.scalars(select(Admin))))
             drafts = len(list(s.scalars(select(IngestDraft))))
-        return {"backend": self.backend_name, "env_id": "", "shows": shows, "admins": admins, "drafts": drafts}
+            applications = len(list(s.scalars(select(ApplicationRecord))))
+        return {"backend": self.backend_name, "env_id": "", "shows": shows, "admins": admins, "drafts": drafts, "applications": applications}
 
     def is_admin(self, user_openid: str) -> bool:
         with self.Session() as s:
@@ -235,6 +254,102 @@ class Database:
                 s.add(row)
             s.flush()
             return row
+
+    def save_application(
+        self,
+        *,
+        show_code: str,
+        structured: dict,
+        raw_text: str,
+        raw_chunks: list[str],
+    ) -> ApplicationRecord:
+        show_code = show_code.strip().upper()
+        applicant_name = str(structured.get("applicant_name") or "").strip()
+        with self.Session.begin() as s:
+            row = None
+            # If the form contains a stable name, a later form with the exact same
+            # show + name is treated as an updated version rather than a duplicate.
+            if applicant_name:
+                row = s.scalar(
+                    select(ApplicationRecord)
+                    .where(ApplicationRecord.show_code == show_code)
+                    .where(ApplicationRecord.applicant_name == applicant_name)
+                    .order_by(ApplicationRecord.id.desc())
+                )
+            payload = dict(
+                show_code=show_code,
+                applicant_name=applicant_name,
+                gender=str(structured.get("gender") or ""),
+                age=str(structured.get("age") or ""),
+                preferred_card=str(structured.get("preferred_card") or ""),
+                tags_json=json.dumps(structured.get("tags") or [], ensure_ascii=False),
+                summary=str(structured.get("summary") or ""),
+                parsed_json=json.dumps(structured, ensure_ascii=False),
+                raw_text=raw_text,
+                raw_chunks_json=json.dumps(raw_chunks, ensure_ascii=False),
+            )
+            if row:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+                row.version += 1
+                row.updated_at = utcnow()
+            else:
+                row = ApplicationRecord(**payload, version=1)
+                s.add(row)
+            s.flush()
+            return row
+
+    def list_applications(self, show_code: str | None = None) -> list[ApplicationRecord]:
+        with self.Session() as s:
+            stmt = select(ApplicationRecord)
+            if show_code:
+                stmt = stmt.where(ApplicationRecord.show_code == show_code.strip().upper())
+            stmt = stmt.order_by(ApplicationRecord.updated_at.desc(), ApplicationRecord.id.desc())
+            return list(s.scalars(stmt))
+
+    def get_application_by_id(self, application_id: int) -> Optional[ApplicationRecord]:
+        with self.Session() as s:
+            return s.get(ApplicationRecord, application_id)
+
+    def application_context(self, max_chars: int = 50000) -> str:
+        rows = self.list_applications()
+        if not rows:
+            return "（还没有录入一表。）"
+        blocks: list[str] = []
+        total = 0
+        for row in rows:
+            parsed = _json_load(row.parsed_json, {})
+            lines = [f"【一表#{row.id}｜{row.show_code}｜{row.applicant_name or '未识别名称'}｜v{row.version}】"]
+            if row.preferred_card:
+                lines.append("意向身份牌：" + row.preferred_card)
+            tags = _json_load(row.tags_json, [])
+            if tags:
+                lines.append("关键词：" + " / ".join(str(x) for x in tags[:10]))
+            prefs = parsed.get("preferences") or []
+            if prefs:
+                lines.append("偏好：" + " / ".join(str(x) for x in prefs[:8]))
+            bounds = parsed.get("boundaries") or []
+            if bounds:
+                lines.append("边界：" + " / ".join(str(x) for x in bounds[:8]))
+            if row.summary:
+                lines.append("概括：" + row.summary.strip())
+            fields = parsed.get("fields") or []
+            compact_fields = []
+            for item in fields[:12]:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("label") or "").strip()
+                value = str(item.get("value") or "").strip().replace("\n", " ")
+                if label and value:
+                    compact_fields.append(f"{label}={value[:180]}")
+            if compact_fields:
+                lines.append("表内字段：" + "；".join(compact_fields))
+            block = "\n".join(lines)
+            if total + len(block) > max_chars:
+                break
+            blocks.append(block)
+            total += len(block) + 2
+        return "\n\n".join(blocks)
 
     def delete_draft_after_save(self, admin_openid: str) -> None:
         self.cancel_draft(admin_openid)

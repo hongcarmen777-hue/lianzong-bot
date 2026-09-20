@@ -10,6 +10,6 @@ def test_ai_capability_prompt_private_ingest():
 
 def test_new_history_namespace():
     text = (ROOT / "xiaopingguo" / "commands.py").read_text(encoding="utf-8")
-    assert "c2c:v025:" in text
-    assert "group:v025:" in text
+    assert "c2c:v027:" in text
+    assert "group:v027:" in text
     assert "可以直接在这个私聊里落库" in text

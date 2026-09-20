@@ -131,3 +131,66 @@ def parse_local_show(code: str, raw_text: str) -> dict[str, Any]:
         "days": days,
         "identity_cards": identity_cards,
     }
+
+
+def parse_local_application(show_code: str, raw_text: str) -> dict[str, Any]:
+    """Best-effort local parser for a submitted 一表.
+
+    It deliberately keeps extraction conservative. The full original text is stored
+    separately by the database layer, so this structure is only an index for later
+    search and matching rather than a replacement for the source text.
+    """
+    show_code = (show_code or "").strip().upper()
+    raw = raw_text or ""
+
+    fields: list[dict[str, str]] = []
+    seen_labels: set[str] = set()
+    # Common form style: “字段：内容” / “字段: 内容”. Keep reasonably short labels
+    # so prose paragraphs containing colons are not mistaken for form fields.
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^(?:[-*•]\s*)?([^：:\n]{1,24})\s*[：:]\s*(.+)$", line)
+        if not m:
+            continue
+        label = m.group(1).strip().strip("*[]【】")
+        value = m.group(2).strip()
+        if not label or not value:
+            continue
+        key = label.lower()
+        if key in seen_labels:
+            continue
+        seen_labels.add(key)
+        fields.append({"label": label, "value": value})
+
+    def pick(*names: str) -> str:
+        normalized = {x.lower() for x in names}
+        for item in fields:
+            label = item["label"].lower().replace(" ", "")
+            if label in normalized:
+                return item["value"]
+        return ""
+
+    applicant_name = pick(
+        "名字", "姓名", "昵称", "群名片", "群昵称", "qq昵称", "称呼", "皮名", "角色名", "name"
+    )
+    gender = pick("性别", "gender")
+    age = pick("年龄", "age")
+    preferred_card = pick(
+        "意向身份牌", "身份牌", "意向卡", "意向牌", "想投身份牌", "想玩身份牌", "card"
+    )
+
+    # Local fallback cannot safely infer subjective preferences from prose.
+    return {
+        "show_code": show_code,
+        "applicant_name": applicant_name,
+        "gender": gender,
+        "age": age,
+        "preferred_card": preferred_card,
+        "tags": [],
+        "preferences": [],
+        "boundaries": [],
+        "summary": "",
+        "fields": fields,
+    }

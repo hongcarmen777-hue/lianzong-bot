@@ -16,7 +16,7 @@ from xiaopingguo.db_http import CloudBaseHTTPDatabase
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in {"/", "/health", "/healthz"}:
-            body = "xiaopingguo v0.2.6 ok\n".encode("utf-8")
+            body = "xiaopingguo v0.2.7 ok\n".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -59,7 +59,7 @@ def build_database(settings: Settings):
         print("[xiaopingguo] WARNING: SQLite fallback explicitly enabled")
         return db
 
-    raise RuntimeError("未配置持久化数据库；v0.2.6 已禁止静默回退到 /tmp SQLite")
+    raise RuntimeError("未配置持久化数据库；v0.2.7 已禁止静默回退到 /tmp SQLite")
 
 
 def main():
