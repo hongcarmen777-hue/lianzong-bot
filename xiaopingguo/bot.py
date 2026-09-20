@@ -17,7 +17,7 @@ class AppleBot(botpy.Client):
         self.router = router
 
     async def on_ready(self):
-        _log.info(f"小苹果 v0.2.4 上线：{self.robot.name}")
+        _log.info(f"小苹果 v0.2.6 上线：{self.robot.name}")
 
     async def on_group_at_message_create(self, message: GroupMessage):
         try:
@@ -68,5 +68,14 @@ class AppleBot(botpy.Client):
                 msg_id=message.id,
                 content=result.text,
             )
-        except Exception:
+        except Exception as exc:
             _log.error(traceback.format_exc())
+            try:
+                await message._api.post_c2c_message(
+                    openid=getattr(message.author, "user_openid", ""),
+                    msg_type=0,
+                    msg_id=message.id,
+                    content=f"这次没有成功落库。数据库报错：{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass

@@ -47,7 +47,7 @@ class CommandRouter:
 
     @staticmethod
     def _help(admin: bool) -> str:
-        base = """小苹果 v0.2.5
+        base = """小苹果 v0.2.6
 
 我现在主要干两件事：
 1）记住历届恋综和身份牌；
@@ -99,7 +99,7 @@ class CommandRouter:
 
         if text in status_aliases:
             backend = getattr(self.db, "backend_name", "未知")
-            return CommandResult(f"小苹果 v0.2.5｜数据库：{backend}")
+            return CommandResult(f"小苹果 v0.2.6｜数据库：{backend}")
 
         # 私聊是骰主后台：认主、档案录入/覆盖、查看档案，以及后台自然聊天。
         if not ctx.is_group:

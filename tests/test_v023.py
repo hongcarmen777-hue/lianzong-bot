@@ -1,13 +1,13 @@
 from xiaopingguo.config import Settings
 
 
-def test_old_deepseek_alias_is_normalized(monkeypatch):
+def test_current_deepseek_flash_id_is_kept(monkeypatch):
     monkeypatch.setenv("QQ_APP_ID", "a")
     monkeypatch.setenv("QQ_APP_SECRET", "b")
     monkeypatch.setenv("CLAIM_TOKEN", "c")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-flash")
     s = Settings.from_env()
-    assert s.deepseek_model == "deepseek-v4-flash"
+    assert s.deepseek_model == "deepseek-flash"
 
 
 def test_cloudbase_key_alias(monkeypatch):

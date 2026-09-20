@@ -16,7 +16,7 @@ from xiaopingguo.db_http import CloudBaseHTTPDatabase
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in {"/", "/health", "/healthz"}:
-            body = "xiaopingguo v0.2.4 ok\n".encode("utf-8")
+            body = "xiaopingguo v0.2.6 ok\n".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -41,13 +41,25 @@ def build_database(settings: Settings):
     if settings.use_cloudbase_http_db:
         db = CloudBaseHTTPDatabase(settings.cloudbase_env_id, settings.cloudbase_api_key)
         db.create_all()
-        print("[xiaopingguo] database backend: CloudBase MySQL HTTP API")
+        db.verify_connection()
+        print(f"[xiaopingguo] database backend: {db.backend_name} | env={settings.cloudbase_env_id}")
         return db
 
-    db = Database(settings.database_url)
-    db.create_all()
-    print(f"[xiaopingguo] database backend: {db.backend_name}")
-    return db
+    if settings.database_url:
+        db = Database(settings.database_url)
+        db.create_all()
+        db.verify_connection()
+        print(f"[xiaopingguo] database backend: {db.backend_name}")
+        return db
+
+    if settings.allow_sqlite_fallback:
+        db = Database("sqlite:////tmp/xiaopingguo-v026.db")
+        db.create_all()
+        db.verify_connection()
+        print("[xiaopingguo] WARNING: SQLite fallback explicitly enabled")
+        return db
+
+    raise RuntimeError("未配置持久化数据库；v0.2.6 已禁止静默回退到 /tmp SQLite")
 
 
 def main():

@@ -33,7 +33,7 @@ def _database_url() -> str:
             "?charset=utf8mb4"
         )
 
-    return "sqlite:////tmp/xiaopingguo-v02.db"
+    return ""
 
 
 def _first_env(*names: str) -> str:
@@ -56,6 +56,7 @@ class Settings:
     ai_history_limit: int
     cloudbase_env_id: str = ""
     cloudbase_api_key: str = ""
+    allow_sqlite_fallback: bool = False
 
     @property
     def use_cloudbase_http_db(self) -> bool:
@@ -63,11 +64,10 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
-        # v0.2.0-0.2.2 once documented this shorthand; normalize it to the
-        # current official model id so existing CloudBase settings keep working.
-        if model == "deepseek-flash":
-            model = "deepseek-v4-flash"
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip() or "deepseek-flash"
+        # DeepSeek V4.1 Flash uses the stable API model id `deepseek-flash`.
+        # Legacy `deepseek-v4-flash` is still accepted upstream, so leave any
+        # explicitly configured legacy value untouched instead of rewriting it.
 
         return cls(
             qq_app_id=os.getenv("QQ_APP_ID", "").strip(),
@@ -82,6 +82,7 @@ class Settings:
             cloudbase_api_key=_first_env(
                 "TCB_API_KEY", "CLOUDBASE_API_KEY", "CLOUDBASE_APIKEY"
             ),
+            allow_sqlite_fallback=os.getenv("ALLOW_SQLITE_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"},
         )
 
     def validate(self) -> None:
@@ -92,5 +93,9 @@ class Settings:
             missing.append("QQ_APP_SECRET")
         if not self.claim_token:
             missing.append("CLAIM_TOKEN")
+        if bool(self.cloudbase_env_id) != bool(self.cloudbase_api_key):
+            missing.append("TCB_ENV_ID/TCB_API_KEY 必须同时配置")
+        if not self.use_cloudbase_http_db and not self.database_url and not self.allow_sqlite_fallback:
+            missing.append("持久化数据库未配置（需要 TCB_ENV_ID + TCB_API_KEY）")
         if missing:
-            raise RuntimeError("缺少环境变量：" + ", ".join(missing))
+            raise RuntimeError("配置错误：" + "；".join(missing))

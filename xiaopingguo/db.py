@@ -94,6 +94,17 @@ class Database:
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
 
+    def verify_connection(self) -> None:
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+
+    def diagnostics(self) -> dict:
+        with self.Session() as s:
+            shows = len(list(s.scalars(select(ShowRecord))))
+            admins = len(list(s.scalars(select(Admin))))
+            drafts = len(list(s.scalars(select(IngestDraft))))
+        return {"backend": self.backend_name, "env_id": "", "shows": shows, "admins": admins, "drafts": drafts}
+
     def is_admin(self, user_openid: str) -> bool:
         with self.Session() as s:
             return s.scalar(select(Admin).where(Admin.user_openid == user_openid)) is not None

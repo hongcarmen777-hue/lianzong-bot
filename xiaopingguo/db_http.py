@@ -63,6 +63,28 @@ class CloudBaseHTTPDatabase:
         # and explicit in cloudbase_mysql_setup.sql.
         return
 
+    def verify_connection(self) -> None:
+        """Fail fast unless the configured CloudBase database can really read AND write."""
+        probe_key = "__xiaopingguo_db_probe__"
+        probe_value = _now_sql()
+        # A read-only check is not enough: the production bug we are guarding
+        # against is "bot runs, but writes never reach MySQL".
+        self.set_setting(probe_key, probe_value)
+        read_back = self.get_setting(probe_key)
+        if read_back != probe_value:
+            raise RuntimeError("CloudBase MySQL 写入自检失败：探针写入后未能读回")
+        self._delete("xp_settings", {"key": f"eq.{probe_key}"})
+
+    def diagnostics(self) -> dict[str, Any]:
+        # Every field below comes from a live HTTP query, not configuration guesses.
+        return {
+            "backend": self.backend_name,
+            "env_id": self.env_id,
+            "shows": len(self._query("xp_shows", select="code")),
+            "admins": len(self._query("xp_admins", select="user_openid")),
+            "drafts": len(self._query("xp_ingest_drafts", select="show_code")),
+        }
+
     def _request(
         self,
         method: str,
@@ -162,6 +184,8 @@ class CloudBaseHTTPDatabase:
     def claim_admin(self, user_openid: str) -> None:
         if not self.is_admin(user_openid):
             self._insert("xp_admins", {"user_openid": user_openid})
+        if not self.is_admin(user_openid):
+            raise RuntimeError("CloudBase MySQL 管理员写入校验失败")
 
     def get_setting(self, key: str) -> Optional[str]:
         rows = self._query("xp_settings", filters={"key": f"eq.{key}"}, limit=1)
@@ -200,7 +224,10 @@ class CloudBaseHTTPDatabase:
         else:
             payload["admin_openid"] = admin_openid
             self._insert("xp_ingest_drafts", payload)
-        return SimpleNamespace(admin_openid=admin_openid, show_code=show_code, mode=mode, chunks_json="[]")
+        saved = self.get_draft(admin_openid)
+        if not saved or str(getattr(saved, "show_code", "")).upper() != show_code:
+            raise RuntimeError("CloudBase MySQL 草稿写入校验失败")
+        return saved
 
     def get_draft(self, admin_openid: str):
         rows = self._query(
@@ -216,11 +243,15 @@ class CloudBaseHTTPDatabase:
             raise ValueError("当前没有正在录入的恋综")
         chunks = _json_load(getattr(row, "chunks_json", "[]"), [])
         chunks.append(content)
+        encoded = json.dumps(chunks, ensure_ascii=False)
         self._update(
             "xp_ingest_drafts",
-            {"chunks_json": json.dumps(chunks, ensure_ascii=False), "updated_at": _now_sql()},
+            {"chunks_json": encoded, "updated_at": _now_sql()},
             {"admin_openid": f"eq.{admin_openid}"},
         )
+        saved = self.get_draft(admin_openid)
+        if not saved or str(getattr(saved, "chunks_json", "")) != encoded:
+            raise RuntimeError("CloudBase MySQL 草稿内容写入校验失败")
         return len(chunks)
 
     def cancel_draft(self, admin_openid: str) -> None:
@@ -278,8 +309,15 @@ class CloudBaseHTTPDatabase:
         else:
             payload["code"] = code
             self._insert("xp_shows", payload)
-        payload["code"] = code
-        return self._show(payload)
+
+        # Never announce success from the request alone. Re-read the persistent
+        # row and verify the exact raw archive + version actually landed.
+        saved = self.get_show_by_code(code)
+        if saved is None:
+            raise RuntimeError(f"CloudBase MySQL 落库校验失败：{code} 写入后查不到")
+        if saved.version != version or saved.raw_text != raw_text:
+            raise RuntimeError(f"CloudBase MySQL 落库校验失败：{code} 读回内容/版本不一致")
+        return saved
 
     def delete_draft_after_save(self, admin_openid: str) -> None:
         self.cancel_draft(admin_openid)
