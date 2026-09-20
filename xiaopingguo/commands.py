@@ -47,7 +47,7 @@ class CommandRouter:
 
     @staticmethod
     def _help(admin: bool) -> str:
-        base = """小苹果 v0.2.4
+        base = """小苹果 v0.2.5
 
 我现在主要干两件事：
 1）记住历届恋综和身份牌；
@@ -99,7 +99,7 @@ class CommandRouter:
 
         if text in status_aliases:
             backend = getattr(self.db, "backend_name", "未知")
-            return CommandResult(f"小苹果 v0.2.4｜数据库：{backend}")
+            return CommandResult(f"小苹果 v0.2.5｜数据库：{backend}")
 
         # 私聊是骰主后台：认主、档案录入/覆盖、查看档案，以及后台自然聊天。
         if not ctx.is_group:
@@ -179,8 +179,19 @@ class CommandRouter:
                     "主群只负责给嘉宾查询、聊天和推荐。"
                 )
 
+            # 防止 AI 沿用旧版本口径，错误地把骰主赶回主群录入。
+            if (
+                len(text) <= 160
+                and re.search(r"录入|入库|落库", text)
+                and re.search(r"怎么|如何|能不能|可以|需要|是不是|主群|私聊|小窗|这里", text)
+            ):
+                return CommandResult(
+                    "可以直接在这个私聊里落库，不用回主群。发“录入恋综 P1”（编号换成实际编号），"
+                    "然后连续把资料发给我，最后发“录入完成”。写入成功后主群会直接读取同一份共享档案。"
+                )
+
             reply = await self.ai.reply(
-                conversation_key=f"c2c:{ctx.user_openid}",
+                conversation_key=f"c2c:v025:{ctx.user_openid}",
                 user_text=text,
                 admin_private=True,
             )
@@ -224,7 +235,7 @@ class CommandRouter:
 
         # 其余内容都当正常聊天。AI 会读取真实档案索引，必要时先反问偏好。
         reply = await self.ai.reply(
-            conversation_key=f"group:{ctx.group_openid}",
+            conversation_key=f"group:v025:{ctx.group_openid}",
             user_text=text,
         )
         return CommandResult(reply)

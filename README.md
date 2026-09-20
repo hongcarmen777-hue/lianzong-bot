@@ -1,4 +1,4 @@
-# 小苹果 v0.2.4 🍎
+# 小苹果 v0.2.5 🍎
 
 这一版在 v0.2.3 的持久化数据库基础上，把**骰主档案后台彻底移到私聊**：私聊录入/覆盖，主群只负责查询、聊天和推荐。
 
@@ -36,7 +36,7 @@ CloudBase：`环境配置 / API Key 配置` → 创建 **服务端 API Key**。
 
 `CLOUDBASE_APIKEY`
 
-v0.2.4 会自动识别这个变量。
+v0.2.5 会自动识别这个变量。
 
 再手动新增：
 
@@ -78,7 +78,7 @@ DeepSeek 当前正式 Flash 模型 ID 使用：
 
 `DEEPSEEK_MODEL=deepseek-v4-flash`
 
-如果你的 CloudBase 里还写着旧的 `deepseek-flash`，v0.2.4 会自动转换成 `deepseek-v4-flash`，但建议以后直接改成正式 ID。
+如果你的 CloudBase 里还写着旧的 `deepseek-flash`，v0.2.5 会自动转换成 `deepseek-v4-flash`，但建议以后直接改成正式 ID。
 
 ## 5. 怎么确认已经用上永久数据库
 
@@ -88,7 +88,7 @@ DeepSeek 当前正式 Flash 模型 ID 使用：
 
 正确结果应当是：
 
-`小苹果 v0.2.4｜数据库：CloudBase MySQL HTTP API（持久化）`
+`小苹果 v0.2.5｜数据库：CloudBase MySQL HTTP API（持久化）`
 
 如果显示 `SQLite 临时数据库`，说明 `TCB_ENV_ID` 或 API Key 没注入成功。
 
@@ -108,7 +108,7 @@ DeepSeek 当前正式 Flash 模型 ID 使用：
 之后重新部署/重启，数据仍然在 CloudBase MySQL 中。
 
 
-## 私聊录入流程（v0.2.4）
+## 私聊录入流程（v0.2.5）
 
 骰主私聊小苹果：
 
@@ -135,3 +135,10 @@ HTTP 数据库解决的是“几只苹果各记各的”问题；但 QQ Bot 本�
 ## 数据安全
 
 `cloudbase_mysql_setup.sql` 为每张表保留了 `_openid` 字段，兼容 CloudBase MySQL 权限机制。机器人使用的是服务端 API Key，Key 只存云端环境变量。
+
+
+## v0.2.5 修正
+- 修正 AI 仍沿用旧口径、错误声称“必须回主群落库”的问题。
+- 骰主私聊是唯一档案后台：`录入恋综 P1` → 连续发资料 → `录入完成`。
+- 主群与私聊读取同一个共享档案库。
+- 新版本启用新的聊天历史 key，避免旧版本错误口径继续污染回答。
